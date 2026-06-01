@@ -1,105 +1,98 @@
-import pandas as pd
+import sys
 import csv
-import io
-import streamlit as st
+import pandas as pd
 from datetime import date, timedelta
+from pathlib import Path
 
 
-REQUIRED_COLUMNS = {"Account Name", "Account Number", "Routing Number", "Amount"}
+def generate_ach_csv(input_path: str, output_path: str) -> int:
+    """
+    Generate an ACH batch CSV from an Excel file.
 
+    Returns the number of recipient records written.
+    Raises ValueError if required columns are missing.
+    """
+    df = pd.read_excel(input_path)
 
-def generate_ach_csv(df: pd.DataFrame) -> tuple[str, list[int], list[int], str]:
+    required_columns = {"Account Name", "Account Number", "Routing Number", "Amount", "Stock # Prefix"}
+    missing = required_columns - set(df.columns)
+    if missing:
+        raise ValueError(f"Missing required column(s): {', '.join(sorted(missing))}")
+
+    # Drop rows where all required fields are blank
+    df = df.dropna(subset=list(required_columns), how="all").reset_index(drop=True)
+
     payment_date = (date.today() + timedelta(days=1)).strftime("%m/%d/%Y")
 
     header = [
-        "New Batch Indicator", "ACH Company ID", "ACH Company Name",
-        "ACH Payment Type", "Payment Description", "Payment Date",
-        "Recipient Name", "Recipient Bank ID", "Recipient Account Number",
-        "Recipient Account Type", "Recipient Status", "Send or Receive",
+        "New Batch Indicator",
+        "ACH Company ID",
+        "ACH Company Name",
+        "ACH Payment Type",
+        "Payment Description",
+        "Payment Date",
+        "Recipient Name",
+        "Recipient Bank ID",
+        "Recipient Account Number",
+        "Recipient Account Type",
+        "Recipient Status",
+        "Send or Receive",
         "Recipient Amount",
     ]
 
     rows = [header]
-    blank_amounts = []
-    skipped_rows = []
 
-    for i, rec in df.iterrows():
-        # Skip rows missing any of the three key fields
-        if pd.isna(rec["Routing Number"]) or pd.isna(rec["Account Number"]) or pd.isna(rec["Account Name"]):
-            skipped_rows.append(i + 2)  # +2 for 1-based row + header row
-            continue
-
-        if pd.isna(rec["Amount"]):
-            blank_amounts.append(i + 2)
-
+    for _, rec in df.iterrows():
+        # B-row: batch-level fields — Payment Description = Stock # Prefix
         batch_row = [
-            "B", "2562600396", "NATIONAL CHARITY",
-            "CCD", "NCS", payment_date,
+            "B",
+            "2562600396",
+            "NATIONAL CHARITY",
+            "CCD",
+            rec["Stock # Prefix"],
+            payment_date,
             "", "", "", "", "", "", "",
         ]
+        # R-row: recipient detail fields
         detail_row = [
-            "R", "", "", "", "", "",
+            "R",
+            "", "", "", "", "",
             rec["Account Name"],
-            str(int(rec["Routing Number"])),
-            str(int(rec["Account Number"])),
-            "Checking", "Active", "Send",
+            rec["Routing Number"],
+            rec["Account Number"],
+            "Checking",
+            "Active",
+            "Send",
             rec["Amount"],
         ]
         rows.append(batch_row)
         rows.append(detail_row)
 
-    output = io.StringIO()
-    writer = csv.writer(output)
-    writer.writerows(rows)
+    with open(output_path, "w", newline="") as f:
+        writer = csv.writer(f)
+        writer.writerows(rows)
 
-    return output.getvalue(), blank_amounts, skipped_rows, payment_date
+    return len(df)
 
 
-# --- UI ---
+def main():
+    input_path = "/Users/animesh/Downloads/achtest.xlsx"
+    output_path = "/Users/animesh/Downloads/ach_upload_test.csv"
 
-st.set_page_config(page_title="ACH Batch Generator", page_icon="🏦")
-st.title("ACH Batch CSV Generator")
-st.write("Upload your Excel file to generate a formatted ACH upload CSV.")
+    if not Path(input_path).exists():
+        print(f"Error: File not found: {input_path}")
+        sys.exit(1)
 
-uploaded_file = st.file_uploader("Choose an Excel file (.xlsx)", type=["xlsx"])
-
-if uploaded_file:
     try:
-        df = pd.read_excel(uploaded_file)
-    except Exception as e:
-        st.error(f"Could not read file: {e}")
-        st.stop()
+        count = generate_ach_csv(input_path, output_path)
+        payment_date = (date.today() + timedelta(days=1)).strftime("%m/%d/%Y")
+        print(f"Done. {count} recipient record(s) written to: {output_path}")
+        print(f"Payment date: {payment_date}")
+        print(f"Total CSV rows: {1 + count * 2}  (1 header + {count} B-rows + {count} R-rows)")
+    except ValueError as e:
+        print(f"Error: {e}")
+        sys.exit(1)
 
-    missing = REQUIRED_COLUMNS - set(df.columns)
-    if missing:
-        st.error(f"Missing required column(s): **{', '.join(sorted(missing))}**")
-        st.write("Columns found in file:")
-        st.code(", ".join(df.columns))
-        st.stop()
 
-    st.success(f"File loaded: **{len(df)} rows** found.")
-
-    with st.expander("Preview source data"):
-        st.dataframe(df[["Account Name", "Routing Number", "Account Number", "Amount"]])
-
-    if st.button("Generate ACH CSV", type="primary"):
-        csv_content, blank_amounts, skipped_rows, payment_date = generate_ach_csv(df)
-
-        written = (len(csv_content.splitlines()) - 1) // 2
-        st.success(f"Generated **{written} records** — payment date: **{payment_date}**")
-
-        if skipped_rows:
-            st.warning(
-                f"Skipped **{len(skipped_rows)} row(s)** due to missing Routing Number, "
-                f"Account Number, or Account Name — source row(s): {skipped_rows}"
-            )
-
-        if blank_amounts:
-            st.warning(f"Blank amounts found in source row(s): {blank_amounts}")
-
-        st.download_button(
-            label="⬇️ Download ach_upload.csv",
-            data=csv_content,
-            file_name="ach_upload.csv",
-            mime="text/csv",
-        )
+if __name__ == "__main__":
+    main()

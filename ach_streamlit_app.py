@@ -76,7 +76,7 @@ def amount_to_string(value):
 
 
 def format_payment_date(d: date) -> str:
-    return f"{d.month}/{d.day}/{d:%y}"
+    return f"{d:%m/%d/%Y}"
 
 
 def pad_routing(routing: str) -> str:
